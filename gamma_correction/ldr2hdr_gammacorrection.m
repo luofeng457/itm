@@ -30,13 +30,11 @@ function [hdr_image,curve] = ldr2hdr_gammacorrection(ldr_image,gamma_value)
     end
 
     if err == 0 
-        
-        %hdr_image=zeros(size(ldr_image),'single'); %32 bits - single precision floating point
-        ldr_image=single(ldr_image);
-        max_hdr=single(500);
+        ldr_image = im2single(ldr_image); %Nortmalized
+        max_hdr=single(100.0);
         max_uint8=single(intmax('uint8'));
-        hdr_image = max_hdr*((ldr_image./max_uint8).^ gamma_value);
-        
+        hdr_image = max_hdr*(ldr_image.^ gamma_value);
+                       
         %Creating transformation curve
         curve = single(1:intmax('uint8'));
         curve = max_hdr*((curve./max_uint8).^ gamma_value);
