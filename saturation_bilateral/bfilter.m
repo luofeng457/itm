@@ -19,10 +19,21 @@
 %
 % Douglas R. Lanman, Brown University, September 2006.
 % dlanman@brown.edu, http://mesh.brown.edu/dlanman
-
-
+% The geometric spread d in the domain is chosen based
+% on the desired amount of low-pass filtering. A large sd
+% blurs more, that is, it combines values from more distant
+% image locations. Also, if an image is scaled up or down, sd
+% must be adjusted accordingly in order to obtain equivalent
+% results. Similarly, the photometric spread sr in the image
+% range is set to achieve the desired amount of combination
+% of pixel values. Loosely speaking, pixels with values much
+% closer to each other than sr are mixed together and values
+% much more distant than sr are not. If the image is amplified
+% or attenuated, sr must be adjusted accordingly in order to
+% leave the results unchanged.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Pre-process input and select appropriate filter.
+
 function B = bfilter(A,w,sigma)
 
 % Verify that the input image exists and is valid.
