@@ -29,6 +29,7 @@ smoothValue  = 10;%0.001*diff(getrangefromclass(ldr_image)).^2;
 gamma_correction = 2.2;
 hdr_out=ldr2hdr_guidedfilter(ldr_image,max_hdr,gamma_correction,nhoodSize,smoothValue); %Neighborhoodsize, DegreeOfSmoothing
 
+
 exrwrite(hdr_out,'hdr_out_gf.exr');
  
 
