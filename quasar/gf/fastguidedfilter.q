@@ -1,7 +1,8 @@
 import "imresize.q"
 import "boxfilter.q"
+import "linalg.q"
 
-function q = fastguidedfilter(I, p, r, eps, s)
+function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s : scalar = 4)
     %   GUIDEDFILTER   O(1) time implementation of guided filter.
     %
     %   - guidance image: I (should be a gray-scale/single channel image)
@@ -9,6 +10,7 @@ function q = fastguidedfilter(I, p, r, eps, s)
     %   - local window radius: r
     %   - regularization parameter: eps
     %   - subsampling ratio: s (try s = r/4 to s=r)
+    %
     %    Coding translated from Matlab source available in http://research.microsoft.com/en-us/um/people/kahe/eccv10/
     %    Author: Gonzalo Luzardo
 
@@ -16,28 +18,110 @@ function q = fastguidedfilter(I, p, r, eps, s)
     p_sub = imresize(p, 1/s, "nearest");
     r_sub = r / s; % make sure this is an integer
 
-    sz = size(I_sub);
-    hei = sz[0];
-    wid = sz[1];
-
-    N = boxfilter(ones(hei, wid,1), r_sub); % the size of each local patch; N=(2r+1)^2 except for boundary pixels.
-     
-    mean_I = boxfilter(I_sub, r_sub) / N;
-    mean_p = boxfilter(p_sub, r_sub) / N;
-    mean_Ip = boxfilter(I_sub.*p_sub, r_sub) / N;
+ 
+    assert(r_sub-int(r_sub)==0,"r/s must be an integer!!. Default value of s is 4")
+       
+    [hei,wid] = size(I_sub);
+    
+    N = boxfilter(ones(hei, wid), r_sub); % the size of each local patch; N=(2r+1)^2 except for boundary pixels.
+    mean_I = boxfilter(I_sub, r_sub) ./ N;
+    mean_p = boxfilter(p_sub, r_sub) ./ N;
+    mean_Ip = boxfilter(I_sub.*p_sub, r_sub) ./ N;
     cov_Ip = mean_Ip - mean_I .* mean_p; % this is the covariance of (I, p) in each local patch.
     
-    mean_II = boxfilter(I_sub.*I_sub, r_sub) / N;
+    mean_II = boxfilter(I_sub.*I_sub, r_sub) ./ N;
     var_I = mean_II - mean_I .* mean_I;
     
     a = cov_Ip ./ (var_I + eps);
     b = mean_p - a .* mean_I;
     
-    mean_a = boxfilter(a, r_sub) / N;
-    mean_b = boxfilter(b, r_sub) / N;
+    mean_a = boxfilter(a, r_sub) ./ N;
+    mean_b = boxfilter(b, r_sub) ./ N;
     
-    mean_a = imresize(mean_a, [size(I, 1), size(I, 2)], "bilinear"); % bilinear is recommended
-    mean_b = imresize(mean_b, [size(I, 1), size(I, 2)], "bilinear");
+    mean_a = imresize(mean_a, [size(I)[0], size(I)[1]], "bilinear"); % bilinear is recommended
+    mean_b = imresize(mean_b, [size(I)[0], size(I)[1]], "bilinear");
     
     q = mean_a .* I + mean_b;
  end
+ 
+ function q:mat = fastguidedfilter_color(I : cube, p : mat, r : scalar, eps : scalar, s : scalar = 4)
+    %   GUIDEDFILTER_COLOR   O(1) time implementation of guided filter using a color image as the guidance.
+    %
+    %   - guidance image: I (should be a color (RGB) image)
+    %   - filtering input image: p (should be a gray-scale/single channel image)
+    %   - local window radius: r
+    %   - regularization parameter: eps
+    %   - subsampling ratio: s (try s = r/4 to s=r)
+    %
+    %    Coding translated from Matlab source available in http://research.microsoft.com/en-us/um/people/kahe/eccv10/
+    %    Author: Gonzalo Luzardo
+    
+    I_sub = imresize(I, 1/s, "nearest"); % NN is often enough
+    p_sub = imresize(p, 1/s, "nearest");
+    r_sub = r / s; % make sure this is an integer
+    
+    assert(r_sub-int(r_sub)==0,"r/s must be an integer!!. Default value of s is 4")
+    
+    [hei,wid] = size(p_sub);
+    
+    N = boxfilter(ones(hei, wid), r_sub); % the size of each local patch; N=(2r+1)^2 except for boundary pixels.
+
+    mean_I_r = boxfilter(I_sub[:, :, 0], r_sub) ./ N;
+    mean_I_g = boxfilter(I_sub[:, :, 1], r_sub) ./ N;
+    mean_I_b = boxfilter(I_sub[:, :, 2], r_sub) ./ N;
+
+    mean_p = boxfilter(p_sub, r_sub) ./ N;
+
+    mean_Ip_r = boxfilter(I_sub[:, :, 0].*p_sub, r_sub) ./ N;
+    mean_Ip_g = boxfilter(I_sub[:, :, 1].*p_sub, r_sub) ./ N;
+    mean_Ip_b = boxfilter(I_sub[:, :, 2].*p_sub, r_sub) ./ N;
+
+    % covariance of (I, p) in each local patch.
+    cov_Ip_r = mean_Ip_r - mean_I_r .* mean_p;
+    cov_Ip_g = mean_Ip_g - mean_I_g .* mean_p;
+    cov_Ip_b = mean_Ip_b - mean_I_b .* mean_p;
+
+    % variance of I in each local patch: the matrix Sigma in Eqn (14).
+    % Note the variance in each local patch is a 3x3 symmetric matrix:
+    %           rr, rg, rb
+    %   Sigma = rg, gg, gb
+    %           rb, gb, bb
+    var_I_rr = boxfilter(I_sub[:, :, 0].*I_sub[:, :, 0], r_sub) ./ N - mean_I_r .*  mean_I_r; 
+    var_I_rg = boxfilter(I_sub[:, :, 0].*I_sub[:, :, 1], r_sub) ./ N - mean_I_r .*  mean_I_g; 
+    var_I_rb = boxfilter(I_sub[:, :, 0].*I_sub[:, :, 2], r_sub) ./ N - mean_I_r .*  mean_I_b; 
+    var_I_gg = boxfilter(I_sub[:, :, 1].*I_sub[:, :, 1], r_sub) ./ N - mean_I_g .*  mean_I_g; 
+    var_I_gb = boxfilter(I_sub[:, :, 1].*I_sub[:, :, 2], r_sub) ./ N - mean_I_g .*  mean_I_b; 
+    var_I_bb = boxfilter(I_sub[:, :, 2].*I_sub[:, :, 2], r_sub) ./ N - mean_I_b .*  mean_I_b; 
+
+    a = zeros(hei, wid, 3);
+    for y=0..hei-1
+        for x=0..wid-1 
+            %Sigma = mat(3,3);
+            Sigma = [[var_I_rr[y, x], var_I_rg[y, x], var_I_rb[y, x]], 
+                      [var_I_rg[y, x], var_I_gg[y, x], var_I_gb[y, x]], 
+                      [var_I_rb[y, x], var_I_gb[y, x], var_I_bb[y, x]]];
+            cov_Ip = [cov_Ip_r[y, x], cov_Ip_g[y, x], cov_Ip_b[y, x]];        
+            a[y, x, :] = cov_Ip * inv(Sigma + eps * eye(3)); 
+        end
+    end
+    
+
+    b = mean_p - a[:, :, 0] .* mean_I_r - a[:, :, 1] .* mean_I_g - a[:, :, 2] .* mean_I_b; % Eqn. (15) in the paper;
+    mean_a = mat(size(a))
+    mean_b = mat(size(b))
+    mean_a[:, :, 0] = boxfilter(a[:, :, 0], r_sub)./N;
+    mean_a[:, :, 1] = boxfilter(a[:, :, 1], r_sub)./N;
+    mean_a[:, :, 2] = boxfilter(a[:, :, 2], r_sub)./N;
+    mean_b = boxfilter(b, r_sub)./N;
+
+    mean_a = imresize(mean_a, [size(I, 0), size(I, 1)], "bilinear"); % bilinear is recommended
+    mean_b = imresize(mean_b, [size(I, 0), size(I, 1)], "bilinear");
+
+    q1= mean_a[:, :, 0] .* I[:, :, 0] +
+        mean_a[:, :, 1] .* I[:, :, 1] +
+        mean_a[:, :, 2] .* I[:, :, 2] 
+    q = q1 + mean_b;
+end
+
+
+
