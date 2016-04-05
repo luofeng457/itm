@@ -14,8 +14,8 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     %    Coding translated from Matlab source available in http://research.microsoft.com/en-us/um/people/kahe/eccv10/
     %    Author: Gonzalo Luzardo
 
-    I_sub = imresize(I, 1/s, "nearest"); % NN is often enough
-    p_sub = imresize(p, 1/s, "nearest");
+    I_sub:mat = imresize(I, 1/s, "nearest"); % NN is often enough
+    p_sub:mat = imresize(p, 1/s, "nearest");
     r_sub = r / s; % make sure this is an integer
 
  
@@ -38,8 +38,8 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     mean_a = boxfilter(a, r_sub) ./ N;
     mean_b = boxfilter(b, r_sub) ./ N;
     
-    mean_a = imresize(mean_a, [size(I)[0], size(I)[1]], "bilinear"); % bilinear is recommended
-    mean_b = imresize(mean_b, [size(I)[0], size(I)[1]], "bilinear");
+    mean_a:mat = imresize(mean_a, [size(I)[0], size(I)[1]], "bilinear"); % bilinear is recommended 
+    mean_b:mat = imresize(mean_b, [size(I)[0], size(I)[1]], "bilinear");
     
     q = mean_a .* I + mean_b;
  end
@@ -56,8 +56,8 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     %    Coding translated from Matlab source available in http://research.microsoft.com/en-us/um/people/kahe/eccv10/
     %    Author: Gonzalo Luzardo
     
-    I_sub = imresize(I, 1/s, "nearest"); % NN is often enough
-    p_sub = imresize(p, 1/s, "nearest");
+    I_sub:cube = imresize(I, 1/s, "nearest"); % NN is often enough
+    p_sub:mat = imresize(p, 1/s, "nearest");
     r_sub = r / s; % make sure this is an integer
     
     assert(r_sub-int(r_sub)==0,"r/s must be an integer!!. Default value of s is 4")
@@ -94,14 +94,13 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     var_I_bb = boxfilter(I_sub[:, :, 2].*I_sub[:, :, 2], r_sub) ./ N - mean_I_b .*  mean_I_b; 
 
     a = zeros(hei, wid, 3);
-    for y=0..hei-1
-        for x=0..wid-1 
-            %Sigma = mat(3,3);
+    for y=0..(hei-1)
+        for x=0..(wid-1) 
             Sigma = [[var_I_rr[y, x], var_I_rg[y, x], var_I_rb[y, x]], 
                       [var_I_rg[y, x], var_I_gg[y, x], var_I_gb[y, x]], 
                       [var_I_rb[y, x], var_I_gb[y, x], var_I_bb[y, x]]];
             cov_Ip = [cov_Ip_r[y, x], cov_Ip_g[y, x], cov_Ip_b[y, x]];        
-            a[y, x, :] = cov_Ip * inv(Sigma + eps * eye(3)); 
+            a[y, x, :] = cov_Ip * inv3x3(Sigma + eps * eye(3)); 
         end
     end
     
@@ -123,5 +122,26 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     q = q1 + mean_b;
 end
 
+
+function out:scalar = det3x3(a:mat)
+    out = (a[0,0] * (a[1,1] * a[2,2] - a[2,1] * a[1,2])
+           -a[1,0] * (a[0,1] * a[2,2] - a[2,1] * a[0,2])
+           +a[2,0] * (a[0,1] * a[1,2] - a[1,1] * a[0,2]))  
+end
+
+function res:mat = inv3x3(m:mat)
+    d = det3x3(m);
+    res = mat(3,3);
+    res[0,0]=m[1,1]*m[2,2]-m[1,2]*m[2,1];
+    res[0,1]=-m[0,1]*m[2,2]+m[0,2]*m[2,1];
+    res[0,2]=m[0,1]*m[1,2]-m[0,2]*m[1,1];  
+    res[1,0]=-m[1,0]*m[2,2]+m[1,2]*m[2,0];
+    res[1,1]=m[0,0]*m[2,2]-m[0,2]*m[2,0];
+    res[1,2]=-m[0,0]*m[1,2]+m[0,2]*m[1,0];
+    res[2,0]=m[1,0]*m[2,1]-m[1,1]*m[2,0];
+    res[2,1]=-m[0,0]*m[2,1]+m[0,1]*m[2,0];
+    res[2,2]=m[0,0]*m[1,1]-m[0,1]*m[1,0];
+    res = res./d;
+end
 
 

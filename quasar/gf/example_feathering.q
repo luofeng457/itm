@@ -7,7 +7,7 @@ p = imread("images/toy-mask.bmp") / 255;
 
 eps = 10^-6;
 r = 32
-s = 32
+s = 16
 tic();
 q = fastguidedfilter_color(I, p[:,:,1], r, eps,s); %Using the Green channel
 toc();

@@ -15,7 +15,7 @@ function imDst:mat = boxfilter(imSrc:mat, r:scalar)
     imDst = zeros(hei,wid);
             
     %cumulative sum over Y axis 
-    imCum = transpose(cumsum(transpose(imSrc)));
+    imCum:mat = transpose(cumsum(transpose(imSrc)));
         
     %difference over Y axis
     imDst[1-1..r+1-1,:] = imCum[1+r-1..2*r+1-1,:];
