@@ -1,2 +1,0 @@
-# itm
-Inverse Tone Mapping
