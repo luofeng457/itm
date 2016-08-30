@@ -37,10 +37,10 @@ import "imfilter.q"
 %vidstream= vidopen("E:\ok_h265_10bit_51Mbit_59fps_Samsung_SUHD_Journey_of_Color.avi")
 %gamma = 2.2
 
-vidstream= vidopen("E:\h265_10bit_51Mbit_59fps_Samsung_UHD_Phantom_Flex.avi")
+vidstream= vidopen("E:\h265_10bit_51Mbit_30fps_Samsung_UHD_Phantom_Flex.avi")
 gamma = 1.5
 dequant = 1
-vidseek(vidstream,50)
+vidseek(vidstream,7)
 
 % ####################  YUV 10 bits
 
