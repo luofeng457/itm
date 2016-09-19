@@ -24,11 +24,11 @@ function [] = __kernel__ pocs_vertical_run(y : cube'unchecked, _
         for m=0..2*r
             sum += x[pos + [m-r,0,0]]
         end
-        if pos[1] >= maxx-2
-            y[pos] = (pos[2] == 0)
-        else
-            y[pos] = min(max(sum/(2*r+1),low[pos]),high[pos])
-        endif
+%        if pos[1] >= maxx-2
+%            y[pos] = (pos[2] == 0)
+%        else
+           y[pos] = min(max(sum/(2*r+1),low[pos]),high[pos])
+%        endif
 end
 
 function y = PQ_EOTF(x)
@@ -67,22 +67,19 @@ end
 
 
 function [] = unmake_raw_cube(y : cube,x : cube,xloc:int)
-    y[:,0..xloc,0..2] = x[:,0..xloc,[2,1,0]]
+    %y[:,0..xloc,0..2] = x[:,0..xloc,[2,1,0]]
+    y[:,:,0..2] = x[:,:,[2,1,0]]
 end
 
 function [] = main()
-    %vidstream= vidopen("/ipids/hd2r/10-bit video/Beauty_3840x2160_120fps_420_10bit_YUV.yuv")
-    %vidstream= vidopen("/scratch/jaelterm/quasar_video/iminds_demo.mp4")
-    %vidstream= vidopen("iminds_demo.mp4")
-    vidstream= vidopen("got2.mkv")
-    vidseek(vidstream,132)
+    vidfile="F:/movie_trailers/dawnoftheplanetoftheapes-tlr2_h1080p.mov"
+    vidstream= vidopen(vidfile)
+    vidseek(vidstream,0)
     vidstream.bits_per_color = 8
-    
-    %vidstream= vidopen("F:\10-bit-YUV-video\ShakeNDry_3840x2160_120fps_420_10bit_YUV.avi")  
     
     eotf_bits_per_color_input = 8
     target_bits_per_color = 16
-    init_gamma=2.4
+    init_gamma=2.2
     
     %lut = PQ_EOTF(0..1/(2^vidstream.bits_per_color-1)..1)
     lut = gamma_EOTF(0..1/(2^eotf_bits_per_color_input-1)..1,init_gamma)
@@ -112,22 +109,21 @@ function [] = main()
     slider_gamma = frm.add_slider("Gamma", init_gamma, 0, 8)
     slider_gamma.onchange.add(() -> vidstate.show_next_frame = true)   
     slider_gamma.onchange.add(() -> lut[:] = gamma_EOTF(0..1/(2^eotf_bits_per_color_input-1)..1,slider_gamma.value)) %the colon needs to be here to invoke call by reference in the scope!
-    slider_noise = frm.add_slider("Noise", 3, 0, 50)
+    slider_noise = frm.add_slider("Noise", 0, 0, 50)
     slider_noise.onchange.add(() -> vidstate.show_next_frame = true)   
     video_display = frm.add_display()
     
-        
-    frame_show_noisy = cube(vidstream.frame_height,vidstream.frame_width,4)
+    frame_show_o = cube(vidstream.frame_height,vidstream.frame_width,4)
     frame_show_denoised = cube(vidstream.frame_height,vidstream.frame_width,4)
-    frame_show = cube(vidstream.frame_height,vidstream.frame_width,3)
+   
+     frame_show = cube(vidstream.frame_height,vidstream.frame_width,3)
     frame_l = cube(vidstream.frame_height,vidstream.frame_width,3)
     frame_u = cube(vidstream.frame_height,vidstream.frame_width,3)
     frame_show_v_buff = cube(vidstream.frame_height,vidstream.frame_width,3)
     cmploc = 600
     r = 6 
     
-   
-    
+       
     sync_framerate(vidstream.avg_frame_rate)
     repeat
         if vidstate.is_playing==true || vidstate.show_next_frame 
@@ -141,24 +137,30 @@ function [] = main()
             if vidstate.is_playing == true
                 success = vidreadframe(vidstream)
             endif
-
+            
+            %Add noise
             frame_show = float(vidstream.rgb_data)
             frame_show = frame_show + floor(randn(size(vidstream.rgb_data))*slider_noise.value/255*2^(vidstream.bits_per_color))
+            
+            %Cliping
             frame_show = max(frame_show,0)
-            frame_show = min(frame_show,(2^(vidstream.bits_per_color)-1))
+            frame_show = min(frame_show,(2^(vidstream.bits_per_color)-1)) %0 a 255
+            
             frame_show_noisy = make_raw_cube(frame_show)
             
             if slider_noise.value~=0
                 denoise_nlmeans(frame_show_noisy, frame_show_denoised, slider_noise.value, search_wnd, half_block_size, correlated_noise)
                 unmake_raw_cube(frame_show,frame_show_denoised,xloc)
             endif
-            
+            %expand an get frame l and h
             EOTF_LUT(frame_show/(2^(vidstream.bits_per_color)-1),frame_show,frame_l,frame_u,lut) 
                                   
             for i = 1..2
-                parallel_do([size(frame_show,0),min(xloc+r,size(frame_show,1)),size(frame_show,2)],frame_show_v_buff,frame_show,r,pocs_horizontal_run)
-                parallel_do([size(frame_show,0),min(xloc,size(frame_show,1)),size(frame_show,2)],frame_show,frame_show_v_buff,r,frame_u,frame_l,xloc,pocs_vertical_run)
-            end
+%                parallel_do([size(frame_show,0),min(xloc+r,size(frame_show,1)),size(frame_show,2)],frame_show_v_buff,frame_show,r,pocs_horizontal_run)
+%                parallel_do([size(frame_show,0),min(xloc,size(frame_show,1)),size(frame_show,2)],frame_show,frame_show_v_buff,r,frame_u,frame_l,xloc,pocs_vertical_run)
+                parallel_do(size(frame_show),frame_show_v_buff,frame_show,r,pocs_horizontal_run)
+                parallel_do(size(frame_show),frame_show,frame_show_v_buff,r,frame_u,frame_l,xloc,pocs_vertical_run)
+end
             
             %hdr_imshow(frame_show*(2^target_bits_per_color-1),[0,(2^target_bits_per_color-1)])
             %imshow(frame_show*(2^target_bits_per_color-1),[0,(2^target_bits_per_color-1)])

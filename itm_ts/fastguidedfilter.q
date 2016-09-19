@@ -56,8 +56,8 @@ function q:mat = fastguidedfilter(I : mat, p : mat, r : scalar, eps : scalar, s 
     %    Coding translated from Matlab source available in http://research.microsoft.com/en-us/um/people/kahe/eccv10/
     %    Author: Gonzalo Luzardo
     
-    I_sub:cube = imresize(I:cube, 1/s, "nearest"); % NN is often enough
-    p_sub:mat = imresize(p:mat, 1/s, "nearest");
+    I_sub:cube = imresize(I, 1/s, "nearest"); % NN is often enough
+    p_sub:mat = imresize(p, 1/s, "nearest");
     r_sub = r / s; % make sure this is an integer
     
     assert(r_sub-int(r_sub)==0,"r/s must be an integer!!. Default value of s is 4")
@@ -144,6 +144,15 @@ function res:mat = inv3x3(m:mat)
     res[2,1]=-m[0,0]*m[2,1]+m[0,1]*m[2,0];
     res[2,2]=m[0,0]*m[1,1]-m[0,1]*m[1,0];
     res = res./d;
+    
+%    %TODO IMPLEMENT A KERNEL VERSION
+%    function [] = __kernel__ inv3x3_kernel(m:mat'unchecked,res:mat'unchecked,pos:ivec3)
+%        %Call det3x3
+%    end
+%    
+%    res=uninit(size(m))
+%    parallel_do(size(m),m,res,inv3x3_kernel)
+%    res=res./d;
 end
 
 
