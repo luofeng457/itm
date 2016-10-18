@@ -21,7 +21,7 @@ uniform vec3 coordScale;
 #define RGB2XYZ_ZG			0.069829
 #define RGB2XYZ_ZB			0.706036
 //Defined 1/08/2016
-#define LUMINANCE_BOOST			4000.0000
+#define LUMINANCE_BOOST			6000.0000
 
 vec3 RGBtoXYZ( vec3 RGB )
 {
