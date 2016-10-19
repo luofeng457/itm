@@ -3,8 +3,7 @@ import "Quasar.UI.dll"
 import "Quasar.Runtime.dll"
 import "Sim2HDR.dll"
 import "Quasar.UI.dll"
-%import "nlmeans_denoising_video.q"
-%import "bilateral_filter.q"
+import "immorphology.q"
 import "fastguidedfilter.q"
 import "inttypes.q"
 import "system.q"
@@ -87,22 +86,22 @@ end
 
 % 1D Horizontal filter kernel
 function [] = __kernel__ pocs_horizontal_run(y : cube'unchecked, _
-        x : cube' clamped, r : int, pos : ivec3)
-        sum = 0.0
-        for m=0..2*r
-            sum += x[pos + [0,m-r,0]]
-        end
-        y[pos] = sum/(2*r+1)
+    x : cube' clamped, r : int, pos : ivec3)
+    sum = 0.0
+    for m=0..2*r
+        sum += x[pos + [0,m-r,0]]
+    end
+    y[pos] = sum/(2*r+1)
 end
 
 % 1D Vertical filter kernel
 function [] = __kernel__ pocs_vertical_run(y : cube'unchecked, _
-        x : cube' clamped, r : int, high:cube' unchecked, low:cube'unchecked, pos : ivec3)
-        sum = 0.0
-        for m=0..2*r
-            sum += x[pos + [m-r,0,0]]
-        end
-        y[pos] = min(max(sum/(2*r+1),low[pos]),high[pos])
+    x : cube' clamped, r : int, high:cube' unchecked, low:cube'unchecked, pos : ivec3)
+    sum = 0.0
+    for m=0..2*r
+        sum += x[pos + [m-r,0,0]]
+    end
+    y[pos] = min(max(sum/(2*r+1),low[pos]),high[pos])
 end
 
 %Apply lut
@@ -135,47 +134,57 @@ function [lum] = __device__ getluminance(c : vec3)
     lum = 0.5 * (cmin + cmax)  % lightness
 end
 
-
 %Get enhance bright mask
 function [y:mat]=get_bright_mask(x:cube'unchecked,params:object)
-    function []= __kernel__ linear_get_mask(x:cube'unchecked,y:mat'unchecked,th:scalar,pos:ivec2)
+    %Thresholding kernel functions
+    function []= __kernel__ thresholding_sat(x:cube'unchecked,y:mat'checked,th:scalar,pos:ivec2)
         luma = getluminance(x[pos[0],pos[1],0..2])
-        if luma > th
+        %At least one channel saturated 
+        if(max(x[pos[0],pos[1],0..2])>230 && luma > th)
             y[pos[0],pos[1]] = 1.0;
         else
             y[pos[0],pos[1]] = 0.0
         endif
     end
 
-    y=uninit(size(x,0..1)) %output image
+    function []= __kernel__ thresholding(x:mat'checked,y:mat'unchecked,th:scalar,pos:ivec2)
+    if(x[pos[0],pos[1]]<= th)
+        y[pos[0],pos[1]] = x[pos[0],pos[1]];
+            else
+        y[pos[0],pos[1]] = 0.0
+            endif
+    end
+
+    %Thresholding original image
+    y=uninit(size(x,0..1)) 
+    parallel_do(size(y),x,y,params.th1*255,thresholding_sat) %Size is WxH    
     
-%    if(params.pgf)
-%        xgray=gaussian_filter(xgray,30.0,15)
-%    endif
-%    
-%    parallel_do(size(x,0..1),xgray,y,params.th,linear_get_mask) %Size is WxH
-%    
-%    if(params.sm)
-%        y=fastguidedfilter(xgray,y,params.r,(10^params.eps)/255,params.s)
-%    endif
+    %Gaussian filter with static values
+    y=gaussian_filter(y,15.0,85)
     
-    parallel_do(size(y,0..1),x,y,params.th,linear_get_mask) %Size is WxH
+    %Thresholding the gaussian image filtered
+    parallel_do(size(y),y,y,params.th2,thresholding) %Size is WxH    
+
+    %Erosion and dilatation (close)
+    imopen(y,ones(3,3),[1,1])    
     
+    %Gaussian filter with static values
+    y=gaussian_filter(y,15.0,77)    
+
 end
 
 %Apply bright mask
-function [y:cube]=apply_bright_mask(x:cube'unchecked,mask:mat'unchecked,max_value:scalar)
+function [y:cube]=apply_bright_mask(x:cube'unchecked,mask:mat'unchecked,factor:scalar)
     function []= __kernel__ linear_get_mask(x:cube'unchecked,y:cube'unchecked,mask:mat'unchecked,max_value:scalar,pos:ivec2)
         {!kernel target="gpu"}
         if(mask[pos[0],pos[1]]>0)
-            y[pos[0],pos[1],:]=x[pos[0],pos[1],:].*mask[pos[0],pos[1]]*2;
-            y[pos[0],pos[1],:]=clamp(y[pos[0],pos[1],:],1.0)
+            y[pos[0],pos[1],:]=x[pos[0],pos[1],:]*(1+mask[pos[0],pos[1]])
         else
             y[pos[0],pos[1],:]=x[pos[0],pos[1],:]; 
         endif
     end
     y=uninit(size(x))
-    parallel_do(size(x,0..1),x,y,mask,max_value,linear_get_mask) %Size is WxH
+    parallel_do(size(x,0..1),x,y,mask,factor,linear_get_mask) %Size is WxH
 end
 
 function [] = main()
@@ -208,25 +217,19 @@ function [] = main()
     search_wnd = 2
     half_block_size = 1
     correlated_noise = 0.0
-    %Bilateral
-    nx=5.0;
-    ny=5.0
-    alpha=4.0%2*2^2 
-    beta = 2.0%2*1^2
     %Guided filter
     gf_params = object()
     gf_params.r=4.0
     gf_params.epsf=1.1
     gf_params.eps=(gf_params.epsf)^2;
     
-        
     %%%%%%%%%%%%  Color graded PARAMS %%%%%%%%%%%%%%%%
     % Derfault params
     tmo_params = object()
     tmo_params.a:scalar= 1.16 % Contrast
     tmo_params.d:scalar = 4.78  % Shoulder
     tmo_params.midIn:scalar=(0.18^(1/2.2))*(2^16-1);
-    tmo_params.midOut:scalar=0.366; %This value could be change dynamically .. TODO
+    tmo_params.midOut:scalar=0.408; %This value could be change dynamically .. TODO
     tmo_params.hdrMax:scalar=max_value %HDR Max value default (in image)
     updateBC(tmo_params);
     
@@ -238,8 +241,8 @@ function [] = main()
         
     %%%%%%%%%%% ENHANCE BRIGHT %%%%%%%%%%%
     eb_params = object()
-    eb_params.pgf=true;
-    eb_params.th=0.83; %Same as LDR2HDR 
+    eb_params.th1=0.87; %Same as LDR2HDR 
+    eb_params.th2=0.5; %Same as LDR2HDR 
     eb_params.sm = true;
     eb_params.eps=-6;
     eb_params.r=32;
@@ -285,10 +288,12 @@ function [] = main()
     % GUI
     frm.add_heading("General parameters")
     cb_moving_line = frm.add_checkbox("Moving line", false)
-    cb_record = frm.add_checkbox("Record", false)
+    cb_side_by_side = frm.add_checkbox("Compare side by side", false)
+    cb_no_line = frm.add_checkbox("No line", false)
+    cb_record = frm.add_checkbox("Recording", false)
     
     frm.add_heading("Denoising parameters (LDR non-linear space)")
-    cb_denoise = frm.add_checkbox("Denoising: ", false)
+    cb_denoise = frm.add_checkbox("Denoising: ", true)
     slider_denoising_epsf = frm.add_slider("Denoising factor:",gf_params.epsf,0.1,20.0)
  
     frm.add_heading("POCS")
@@ -297,16 +302,16 @@ function [] = main()
     
     frm.add_heading("Brightness")
     cb_enhance_brightness = frm.add_checkbox("Enhance Brigthness: ", false)
-    cb_pgf = frm.add_checkbox("Pre gaussian: " , eb_params.pgf)
     cb_sm = frm.add_checkbox("Stop mask:", eb_params.sm)
     cb_show_brightness_mask = frm.add_checkbox("Show Mask ", false)
-    slider_brightness_th = frm.add_slider("Threshold:",eb_params.th,0.18,1)
+    slider_brightness_th1 = frm.add_slider("th1:",eb_params.th1,0.18,1.0)
+    slider_brightness_th2 = frm.add_slider("th2:",eb_params.th2,0.1,1.0)
         
     frm.add_heading("Color grading params")
     slider_a = frm.add_slider("Contrast(a):",tmo_params.a,0.0,10.0)
     slider_d = frm.add_slider("Shoulder(d):",tmo_params.d,0.0,10.0)
     slider_midIn = frm.add_slider("Mid In :",tmo_params.midIn,0.0,max_value)
-    slider_midOut =  frm.add_slider("Mid Out :",tmo_params.midOut,0.0,1)
+    slider_midOut =  frm.add_slider("Mid Out (*) :",tmo_params.midOut,0.0,1)
     
     frm.add_heading("Video Player")
     vidstate = object()
@@ -321,11 +326,18 @@ function [] = main()
     params_display = frm.add_display()
     
     %Events
-    slider_brightness_th.onchange.add(()-> (eb_params.th = slider_brightness_th.value););                        
+    slider_brightness_th1.onchange.add(()-> (eb_params.th1 = slider_brightness_th1.value););                        
     
-    cb_pgf.onchange.add(()-> (eb_params.pgf = cb_pgf.value);); 
+    slider_brightness_th2.onchange.add(()-> (eb_params.th2 = slider_brightness_th2.value););                        
     
     cb_sm.onchange.add(()-> (eb_params.sm = cb_sm.value);); 
+    
+    cb_moving_line.onchange.add(()-> (cb_no_line.value=false;)); 
+    
+    cb_side_by_side.onchange.add(()-> (cb_no_line.value=false;
+                                       cb_moving_line.value = false;));
+    
+    cb_no_line.onchange.add(()-> (cb_moving_line.value = false;)); 
     
     slider_a.onchange.add(()-> (tmo_params.a = slider_a.value;
                                 updateBC(tmo_params)));      
@@ -398,18 +410,11 @@ function [] = main()
         %Linearize frame (normalized)
         frame_denoised = linearize(frame_denoised) %Max value
         
-        %Denoising video artifacts due to the compression using NLMeans
+%        %Denoising video artifacts due to the compression using NLMeans
 %        frame_noisy = make_raw_cube(frame_original)
 %        denoise_nlmeans(frame_noisy,frame_denoised, search_wnd, half_block_size, correlated_noise)
 %        unmake_raw_cube(frame_noisy,frame_processed)
         
-        %Denoising using bilateral filter
-%        lab_frame = rgb2lab(frame)
-%        bf = compute_bilateral_filter(lab_frame, nx,ny, alpha, beta, 0, 0)
-%        frame_denoised = apply_bilateral_filter(frame, bf, nx, ny)
-
-        
-
         %Get bright mask
         frame_bright_mask = get_bright_mask(frame,eb_params)                                
                                                                                                 
@@ -432,7 +437,7 @@ function [] = main()
         
         %Enhance brightess
         if(cb_enhance_brightness.value)
-            frame_dequant = apply_bright_mask(frame_dequant,frame_bright_mask,1.0)
+            frame_dequant = apply_bright_mask(frame_dequant,frame_bright_mask,4)
         endif
         
         %Show curve
@@ -440,40 +445,52 @@ function [] = main()
         
         %Create show frame
         %Show mask instead original video
-        if(cb_show_brightness_mask.value)
-            frame_show[:,0..xloc,0]=frame_bright_mask[:,0..xloc]
-            frame_show[:,0..xloc,1]=frame_bright_mask[:,0..xloc]
-            frame_show[:,0..xloc,2]=frame_bright_mask[:,0..xloc]
+        if(cb_no_line.value)
+            frame_show=frame_dequant;
         else
-            frame_show[:,0..xloc,:]=linearize(frame[:,0..xloc,:])
-        endif
-        
-        %Show processed
-        frame_show[:,xloc..s_width-1,:]=frame_dequant[:,xloc..s_width-1,:]
-            
-        %Black vertical line
-        frame_show[:,xloc..xloc+1,:]=0
-        
+            if(cb_side_by_side.value)
+                %Must be 540x960 each image
+                frame_show=zeros(size(frame_show)); 
+                frame_show[s_height/4..s_height/4+s_height/2-1,0..s_width/2-1,:] = imresize(linearize(frame),0.5,"nearest")
+                frame_show[s_height/4..s_height/4+s_height/2-1,s_width/2..s_width-1,:] = imresize(frame_dequant,0.5,"nearest")
+                
+            else
+                if(cb_show_brightness_mask.value)
+                    frame_show[:,0..xloc,0]=frame_bright_mask[:,0..xloc]
+                    frame_show[:,0..xloc,1]=frame_bright_mask[:,0..xloc]
+                    frame_show[:,0..xloc,2]=frame_bright_mask[:,0..xloc]
+                else
+                    frame_show[:,0..xloc,:]=linearize(frame[:,0..xloc,:])
+                endif
+                
+                %Show processed
+                frame_show[:,xloc..s_width-1,:]=frame_dequant[:,xloc..s_width-1,:]
+                    
+                %Black vertical line
+                frame_show[:,xloc..xloc+1,:]=0
+            endif
+        endif            
         %hdr_imshow(frame_dequant*max_value,[0,max_value])
         h = hdr_imshow(frame_show*max_value,[0,max_value])
        
-%        % Save in PNG
-%        if(cb_record.value)
-%            y = h.rasterize()
-%            png_path = sprintf(strcat(png_out_folder,"out%08d.png"),png_frame_counter); 
-%            y= uint8_to_float(y[size(y,0)-1..-1..0,:,:]) %Flip and converto to float
-%
-%%            frame_pngsave[10..10+s_height-10,0..size(y,1)-1,:] = y[10..10+s_height-10,0..size(y,1)-1,:]
-%%            frame_pngsave[:,s_width-26..s_width-1,:]=0;
-%
-%            %Black borders           
-%%            frame_pngsave[132..132+s_height-10,0..size(y,1)-1,:] = y[16..16+s_height-10,0..size(y,1)-1,:]
-%%            frame_pngsave[:,s_width-26..s_width-1,:]=0;
-%        
-%            frame_pngsave[158..954,0..size(y,1)-1,:] = y[158..954,0..size(y,1)-1,:]
+        % Save in PNG
+        if(cb_record.value)
+            y = h.rasterize()
+            png_path = sprintf(strcat(png_out_folder,"out%08d.png"),png_frame_counter); 
+            y= uint8_to_float(y[size(y,0)-1..-1..0,:,:]) %Flip and converto to float
+
+%            %Entire acreen 
+%            frame_pngsave[10..10+s_height-10,0..size(y,1)-1,:] = y[10..10+s_height-10,0..size(y,1)-1,:]
 %            frame_pngsave[:,s_width-26..s_width-1,:]=0;
-%            imwrite(png_path, frame_pngsave)
-%        endif
+
+%            %Black borders           
+%            frame_pngsave[132..132+s_height-10,0..size(y,1)-1,:] = y[16..16+s_height-10,0..size(y,1)-1,:]
+%            frame_pngsave[:,s_width-26..s_width-1,:]=0;
+            %Black borders        
+            frame_pngsave[158..954,0..size(y,1)-1,:] = y[158..954,0..size(y,1)-1,:]
+            frame_pngsave[:,s_width-26..s_width-1,:]=0;
+            imwrite(png_path, frame_pngsave)
+        endif
 
         %toc()
         %Update position slider
