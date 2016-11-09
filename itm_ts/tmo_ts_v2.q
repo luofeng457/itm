@@ -49,22 +49,22 @@ end
 
 %Kernel to Apply tmo operator to Separation of Max an RGB ratio in parllel
 function [y:cube] = color_grade(x:cube,t:object)
-    function []= __kernel__ color_grade_kernel(x:cube'unchecked,y:cube'unchecked,a:scalar,b:scalar,c:scalar,d:scalar,pos:ivec2)
+    function []= __kernel__ color_grade_kernel(x:cube'unchecked,y:cube'unchecked,a:scalar,b:scalar,c:scalar,d:scalar,p:scalar,pos:ivec2)
         {!kernel target="gpu"}
         input=x[pos[0],pos[1],0..2];
         
-        %Aply Separation of Max an RGB ratio
+        %Apply Separation of Max an RGB ratio
         peak=max(input);
         ratio=input/peak;
         peak=(peak.^a)./(((peak.^a).^d).*b+c);
         output=peak*ratio;
-        
-        output=clamp_values(output,0.0,1.0) %Clamp values
+        %Clamp and peak luminance ratio
+        output=p*clamp_values(output,0.0,1.0) %Clamp values
         syncthreads
         y[pos[0],pos[1],0..2]=output;
     end
     y=uninit(size(x))
-    parallel_do(size(x,0..1),x,y,t.a,t.b,t.c,t.d,color_grade_kernel)
+    parallel_do(size(x,0..1),x,y,t.a,t.b,t.c,t.d,t.peak_luminance_ratio,color_grade_kernel)
 end
 
 %Linearize sRGB
@@ -134,13 +134,25 @@ function [lum] = __device__ getluminance(c : vec3)
     lum = 0.5 * (cmin + cmax)  % lightness
 end
 
+%Get luminance using HSL color space
+function [lum:mat] = getLumaImage(image : cube)
+    function [] = __kernel__ getLuma_kernel(x:cube'unchecked,y:mat'unchecked,pos:ivec2)
+       cmax = max([x[pos[0],pos[1],0],x[pos[0],pos[1],1],x[pos[0],pos[1],2]])
+       cmin = min([x[pos[0],pos[1],0],x[pos[0],pos[1],1],x[pos[0],pos[1],2]])
+       y[pos[0],pos[1]] = 0.5 * (cmin + cmax)  % lightness
+    end
+    lum:mat=uninit(size(image,0..1))
+    parallel_do(size(lum),image,lum,getLuma_kernel)   
+end
+
 %Get enhance bright mask
 function [y:mat]=get_bright_mask(x:cube'unchecked,params:object)
     %Thresholding kernel functions
     function []= __kernel__ thresholding_sat(x:cube'unchecked,y:mat'checked,th:scalar,pos:ivec2)
         luma = getluminance(x[pos[0],pos[1],0..2])
         %At least one channel saturated 
-        if(max(x[pos[0],pos[1],0..2])>230 && luma > th)
+        if(luma > th)
+        %if(max(x[pos[0],pos[1],0..2])>0.7 && luma > th)
             y[pos[0],pos[1]] = 1.0;
         else
             y[pos[0],pos[1]] = 0.0
@@ -148,49 +160,49 @@ function [y:mat]=get_bright_mask(x:cube'unchecked,params:object)
     end
 
     function []= __kernel__ thresholding(x:mat'checked,y:mat'unchecked,th:scalar,pos:ivec2)
-    if(x[pos[0],pos[1]]<= th)
-        y[pos[0],pos[1]] = x[pos[0],pos[1]];
-            else
-        y[pos[0],pos[1]] = 0.0
-            endif
+        if(x[pos[0],pos[1]]>= th)
+           y[pos[0],pos[1]] = x[pos[0],pos[1]];
+        else
+           y[pos[0],pos[1]] = 0.0
+        endif
     end
 
     %Thresholding original image
     y=uninit(size(x,0..1)) 
-    parallel_do(size(y),x,y,params.th1*255,thresholding_sat) %Size is WxH    
+    parallel_do(size(y),x,y,params.th1,thresholding_sat) %Size is WxH    
     
     %Gaussian filter with static values
-    y=gaussian_filter(y,15.0,85)
+    y=gaussian_filter(y,15.0,85)/max(y)
     
     %Thresholding the gaussian image filtered
     parallel_do(size(y),y,y,params.th2,thresholding) %Size is WxH    
 
-    %Erosion and dilatation (close)
-    imopen(y,ones(3,3),[1,1])    
-    
-    %Gaussian filter with static values
-    y=gaussian_filter(y,15.0,77)    
-
+    y = fastguidedfilter(getLumaImage(x),y,32, 10^-6);
+    y=gaussian_filter(y,5)/max(y)
+     
+   
 end
 
 %Apply bright mask
-function [y:cube]=apply_bright_mask(x:cube'unchecked,mask:mat'unchecked,factor:scalar)
-    function []= __kernel__ linear_get_mask(x:cube'unchecked,y:cube'unchecked,mask:mat'unchecked,max_value:scalar,pos:ivec2)
+function [y:cube]=apply_bright_mask(x:cube'unchecked,mask:mat'unchecked, f:scalar)
+    function []= __kernel__ linear_get_mask(x:cube'unchecked,y:cube'unchecked,mask:mat'unchecked,f:scalar,pos:ivec2)
         {!kernel target="gpu"}
         if(mask[pos[0],pos[1]]>0)
-            y[pos[0],pos[1],:]=x[pos[0],pos[1],:]*(1+mask[pos[0],pos[1]])
+            y[pos[0],pos[1],:]=x[pos[0],pos[1],:]*(1+mask[pos[0],pos[1]]*f)
         else
             y[pos[0],pos[1],:]=x[pos[0],pos[1],:]; 
         endif
     end
     y=uninit(size(x))
-    parallel_do(size(x,0..1),x,y,mask,factor,linear_get_mask) %Size is WxH
+    parallel_do(size(x,0..1),x,y,mask,f,linear_get_mask) %Size is WxH
 end
 
 function [] = main()
 %    video_file="F:/HDR-SDR+-SDR/SDR/SC - manual grading/AutoWeldingClip.avi"
-    video_file="F:/movie_trailers/dawnoftheplanetoftheapes-tlr2_h1080p.mov"
-%   video_file = "F:/movie_trailers/Mad_Max_Fury_Road_2015_Trailer_F4_5.1-1080p-HDTN.mp4"
+%    video_file="F:/movie_trailers/dawnoftheplanetoftheapes-tlr2_h1080p.mov"
+%    video_file = "F:/more_content/Tomorrowland_2015__Official_Aftermovie.MP4"
+video_file = "E:/tom_convert/SC-manual/BikeSparklersClip.avi"
+%    video_file = "F:/movie_trailers/Mad_Max_Fury_Road_2015_Trailer_F4_5.1-1080p-HDTN.mp4"
 %    video_file = "F:/more_content/eoft2.MP4"
 %    video_file="F:/movie_trailers/Interstellar_2014_trailer_2_5.1-1080p-HDTN.mp4"
 %    video_file="F:/movie_trailers/revenant-tlr1_h1080p.mov"
@@ -200,6 +212,17 @@ function [] = main()
 %    video_file="F:/movie_trailers/thewheel-got-acard_h1080p.mov"
 
 
+%    jef = imread("C:\Users\ipi\Desktop\ishihara_10.jpg")/255
+%    h = hdr_imshow((jef.^(2.2))/10,[0,1])
+%    y = h.rasterize()
+%    frame_pngsave = zeros(size(y))
+%    s_height = size(jef,0)
+%    frame_pngsave[50..s_height-50-1,0..size(y,1)-10,:] = y[50..s_height-50-1,0..size(y,1)-10,:]
+%    y= uint8_to_float(y[size(y,0)-1..-1..0,:,:])
+%    imwrite("C:\Users\ipi\Desktop\bla2.png", y)
+%    return
+
+
     % Output PNG file path
     png_out_folder = "C:/Users/ipi/Videos/"
     png_frame_counter=1;
@@ -207,10 +230,16 @@ function [] = main()
     png_out_h = 1080    
                 
     %%%%%%%%%%%%%%%% General Params %%%%%%%%%%%%%%%%
-    %Target bit
+    general_params = object()
+    general_params.peak_luminance = 2500
+    general_params.peak_luminance_display = 6000
+    general_params.peak_luminance_r = general_params.peak_luminance/general_params.peak_luminance_display % 5000 nits maximun on regular 
+    general_params.boost_luminance_r = 1-general_params.peak_luminance_r;
+
     target_bits_per_color = 16.0 %Number of bits
     max_value = 2^target_bits_per_color-1
-    
+    sdr_factor = 1;%2.4%10
+      
     %%%%%%%%%%%%%%%% Denoising PARAMS %%%%%%%%%%%%%%%
     denoising_method=0
     %NLMS settings- 0
@@ -226,27 +255,25 @@ function [] = main()
     %%%%%%%%%%%%  Color graded PARAMS %%%%%%%%%%%%%%%%
     % Derfault params
     tmo_params = object()
-    tmo_params.a:scalar= 1.16 % Contrast
-    tmo_params.d:scalar = 4.78  % Shoulder
-    tmo_params.midIn:scalar=(0.18^(1/2.2))*(2^16-1);
-    tmo_params.midOut:scalar=0.408; %This value could be change dynamically .. TODO
+    tmo_params.a:scalar= 1.41 % Contrast
+    tmo_params.d:scalar = 2.25  % Shoulder
+    tmo_params.midIn:scalar=25000%(0.18^(1/2.2))*(2^16-1);
+    tmo_params.midOut:scalar=0.382; %This value could be change dynamically .. TODO
     tmo_params.hdrMax:scalar=max_value %HDR Max value default (in image)
+    tmo_params.peak_luminance_ratio:scalar=general_params.peak_luminance_r %HDR Max value default (in image)
     updateBC(tmo_params);
     
     %%%%%%%%%%%% POCS  %%%%%%%%%%%%%%%
     pocs_params = object();
     pocs_params.r_pocs=6
     pocs_params.it=6
-    pocs_params.steps=128
+    pocs_params.steps=36
         
     %%%%%%%%%%% ENHANCE BRIGHT %%%%%%%%%%%
     eb_params = object()
-    eb_params.th1=0.87; %Same as LDR2HDR 
-    eb_params.th2=0.5; %Same as LDR2HDR 
-    eb_params.sm = true;
-    eb_params.eps=-6;
-    eb_params.r=32;
-    eb_params.s=16;
+    eb_params.th1=0.721; %Same as LDR2HDR 
+    eb_params.th2=0.115; %Same as LDR2HDR 
+    eb_params.f=0.25; 
     
     %%%%%%%%%%%%%%%%%%%% FORM %%%%%%%%%%%%%%%%%%%%%%%
     frm = form("Color grading")
@@ -280,7 +307,7 @@ function [] = main()
     frame_show = cube(s_height,s_width,3)
 
     sz = [s_height,s_width,3]   
-    looping = false
+    looping = true
 
     % Sets the frame rate for the imshow function
     sync_framerate(stream.avg_frame_rate) 
@@ -289,7 +316,7 @@ function [] = main()
     frm.add_heading("General parameters")
     cb_moving_line = frm.add_checkbox("Moving line", false)
     cb_side_by_side = frm.add_checkbox("Compare side by side", false)
-    cb_no_line = frm.add_checkbox("No line", false)
+    cb_no_line = frm.add_checkbox("No line", true)
     cb_record = frm.add_checkbox("Recording", false)
     
     frm.add_heading("Denoising parameters (LDR non-linear space)")
@@ -301,13 +328,14 @@ function [] = main()
     slider_pocs_steps = frm.add_slider("S:",pocs_params.steps,1,512)
     
     frm.add_heading("Brightness")
-    cb_enhance_brightness = frm.add_checkbox("Enhance Brigthness: ", false)
-    cb_sm = frm.add_checkbox("Stop mask:", eb_params.sm)
+    cb_enhance_brightness = frm.add_checkbox("Enhance Brigthness: ", true)
     cb_show_brightness_mask = frm.add_checkbox("Show Mask ", false)
     slider_brightness_th1 = frm.add_slider("th1:",eb_params.th1,0.18,1.0)
     slider_brightness_th2 = frm.add_slider("th2:",eb_params.th2,0.1,1.0)
+    slider_brightness_f = frm.add_slider("F:",eb_params.f,0.1,20)
         
     frm.add_heading("Color grading params")
+    slider_max_lum = frm.add_slider("Maximun luminance:",general_params.peak_luminance,400,general_params.peak_luminance_display)
     slider_a = frm.add_slider("Contrast(a):",tmo_params.a,0.0,10.0)
     slider_d = frm.add_slider("Shoulder(d):",tmo_params.d,0.0,10.0)
     slider_midIn = frm.add_slider("Mid In :",tmo_params.midIn,0.0,max_value)
@@ -328,9 +356,15 @@ function [] = main()
     %Events
     slider_brightness_th1.onchange.add(()-> (eb_params.th1 = slider_brightness_th1.value););                        
     
+    slider_max_lum.onchange.add(()-> (  general_params.peak_luminance = slider_max_lum.value;
+                                        general_params.peak_luminance_r = general_params.peak_luminance/general_params.peak_luminance_display;
+                                        general_params.boost_luminance_r = 1-general_params.peak_luminance_r;
+                                        tmo_params.peak_luminance_ratio=general_params.peak_luminance_r;));                        
+    
     slider_brightness_th2.onchange.add(()-> (eb_params.th2 = slider_brightness_th2.value););                        
     
-    cb_sm.onchange.add(()-> (eb_params.sm = cb_sm.value);); 
+    slider_brightness_f.onchange.add(()-> (eb_params.f = slider_brightness_f.value););                        
+    
     
     cb_moving_line.onchange.add(()-> (cb_no_line.value=false;)); 
     
@@ -371,7 +405,7 @@ function [] = main()
     cmploc = s_width/2;
     xloc = mod(cmploc,2*size(frame_show,1))
     
-    %vidseek(stream,10)
+%    vidseek(stream,5)
     repeat
         %tic()
         if(cb_moving_line.value)
@@ -416,7 +450,7 @@ function [] = main()
 %        unmake_raw_cube(frame_noisy,frame_processed)
         
         %Get bright mask
-        frame_bright_mask = get_bright_mask(frame,eb_params)                                
+        frame_bright_mask = get_bright_mask(frame_denoised,eb_params)                                
                                                                                                 
         %Linear expansion SIM2 16 stops
         frame_expanded=linear_expansion(frame_denoised,max_value) %Expand to max value
@@ -437,11 +471,11 @@ function [] = main()
         
         %Enhance brightess
         if(cb_enhance_brightness.value)
-            frame_dequant = apply_bright_mask(frame_dequant,frame_bright_mask,4)
+            frame_dequant = apply_bright_mask(frame_dequant,frame_bright_mask,eb_params.f)
         endif
         
         %Show curve
-        params_display.plot(val_in,lut);
+        params_display.plot(val_in,lut*general_params.peak_luminance_display);
         
         %Create show frame
         %Show mask instead original video
@@ -451,7 +485,7 @@ function [] = main()
             if(cb_side_by_side.value)
                 %Must be 540x960 each image
                 frame_show=zeros(size(frame_show)); 
-                frame_show[s_height/4..s_height/4+s_height/2-1,0..s_width/2-1,:] = imresize(linearize(frame),0.5,"nearest")
+                frame_show[s_height/4..s_height/4+s_height/2-1,0..s_width/2-1,:] = imresize(linearize(frame),0.5,"nearest")/sdr_factor;
                 frame_show[s_height/4..s_height/4+s_height/2-1,s_width/2..s_width-1,:] = imresize(frame_dequant,0.5,"nearest")
                 
             else
@@ -460,7 +494,7 @@ function [] = main()
                     frame_show[:,0..xloc,1]=frame_bright_mask[:,0..xloc]
                     frame_show[:,0..xloc,2]=frame_bright_mask[:,0..xloc]
                 else
-                    frame_show[:,0..xloc,:]=linearize(frame[:,0..xloc,:])
+                    frame_show[:,0..xloc,:]=linearize(frame[:,0..xloc,:])/sdr_factor
                 endif
                 
                 %Show processed
@@ -479,16 +513,23 @@ function [] = main()
             png_path = sprintf(strcat(png_out_folder,"out%08d.png"),png_frame_counter); 
             y= uint8_to_float(y[size(y,0)-1..-1..0,:,:]) %Flip and converto to float
 
+
+
 %            %Entire acreen 
-%            frame_pngsave[10..10+s_height-10,0..size(y,1)-1,:] = y[10..10+s_height-10,0..size(y,1)-1,:]
+            frame_pngsave[20..s_height-15-1,0..size(y,1)-15,:] = y[20..s_height-15-1,0..size(y,1)-15,:]
+%            frame_pngsave[:,s_width-26..s_width-1,:]=0;
+%            
+             %Entire acreen 
+%            frame_pngsave[50..50+s_height-10,0..size(y,1)-1,:] = y[10..10+s_height-10,0..size(y,1)-1,:]
 %            frame_pngsave[:,s_width-26..s_width-1,:]=0;
 
-%            %Black borders           
+            %Black borders           
 %            frame_pngsave[132..132+s_height-10,0..size(y,1)-1,:] = y[16..16+s_height-10,0..size(y,1)-1,:]
 %            frame_pngsave[:,s_width-26..s_width-1,:]=0;
+
             %Black borders        
-            frame_pngsave[158..954,0..size(y,1)-1,:] = y[158..954,0..size(y,1)-1,:]
-            frame_pngsave[:,s_width-26..s_width-1,:]=0;
+%            frame_pngsave[158..954,0..size(y,1)-1,:] = y[158..954,0..size(y,1)-1,:]
+%            frame_pngsave[:,s_width-26..s_width-1,:]=0;
             imwrite(png_path, frame_pngsave)
         endif
 
