@@ -229,7 +229,7 @@ function [] = main()
     %Target bit
     target_bits_per_color = 16.0 %Number of bits
     max_value = 2^target_bits_per_color-1
-    sdr_factor = 5
+    sdr_factor = 30
     
     %%%%%%%%%%%%%%%% Denoising PARAMS %%%%%%%%%%%%%%%
     denoising_method=0

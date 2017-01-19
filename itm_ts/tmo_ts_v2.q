@@ -201,7 +201,7 @@ function [] = main()
 %    video_file="F:/HDR-SDR+-SDR/SDR/SC - manual grading/AutoWeldingClip.avi"
 %    video_file="F:/movie_trailers/dawnoftheplanetoftheapes-tlr2_h1080p.mov"
 %    video_file = "F:/more_content/Tomorrowland_2015__Official_Aftermovie.MP4"
-video_file = "E:/tom_convert/SC-manual/BikeSparklersClip.avi"
+%video_file = "E:/tom_convert/SC-manual/BikeSparklersClip.avi"
 %    video_file = "F:/movie_trailers/Mad_Max_Fury_Road_2015_Trailer_F4_5.1-1080p-HDTN.mp4"
 %    video_file = "F:/more_content/eoft2.MP4"
 %    video_file="F:/movie_trailers/Interstellar_2014_trailer_2_5.1-1080p-HDTN.mp4"
@@ -211,6 +211,7 @@ video_file = "E:/tom_convert/SC-manual/BikeSparklersClip.avi"
 %    video_file="F:/movie_trailers/The Angry Birds Movie (2016) DVDRip LAT-ZeiZ.mkv"
 %    video_file="F:/movie_trailers/thewheel-got-acard_h1080p.mov"
 
+video_file="F:/movie_trailers/sing-trailer-6_h1080p.mov"
 
 %    jef = imread("C:\Users\ipi\Desktop\ishihara_10.jpg")/255
 %    h = hdr_imshow((jef.^(2.2))/10,[0,1])
@@ -238,7 +239,7 @@ video_file = "E:/tom_convert/SC-manual/BikeSparklersClip.avi"
 
     target_bits_per_color = 16.0 %Number of bits
     max_value = 2^target_bits_per_color-1
-    sdr_factor = 1;%2.4%10
+    sdr_factor = 6;%2.4%10
       
     %%%%%%%%%%%%%%%% Denoising PARAMS %%%%%%%%%%%%%%%
     denoising_method=0
